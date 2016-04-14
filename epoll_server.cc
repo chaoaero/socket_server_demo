@@ -17,6 +17,7 @@
 #include <arpa/inet.h>
 #include <sys/epoll.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <sys/types.h>
 
 #define IPADDRESS   "127.0.0.1"
@@ -46,6 +47,14 @@ static void add_event(int epollfd,int fd,int state);
 static void modify_event(int epollfd,int fd,int state);
 //删除事件
 static void delete_event(int epollfd,int fd,int state);
+
+int setnonblocking(int sockfd)
+{
+    if (fcntl(sockfd, F_SETFL, fcntl(sockfd, F_GETFD, 0)|O_NONBLOCK) == -1) {
+        return -1;
+    }
+    return 0;
+}
 
 int main(int argc,char *argv[])
 {
@@ -87,12 +96,20 @@ static void do_epoll(int listenfd)
     memset(buf,0,MAXSIZE);
     //创建一个描述符
     epollfd = epoll_create(FDSIZE);
+    if(epollfd == -1) {
+        perror("epoll_create failed");
+        exit(EXIT_FAILURE);
+    }
     //添加监听描述符事件
     add_event(epollfd,listenfd,EPOLLIN);
     for ( ; ; )
     {
         //获取已经准备好的描述符事件
         ret = epoll_wait(epollfd,events,EPOLLEVENTS,-1);
+        if(ret == -1) {
+            perror("epoll_wait failed");
+            exit(EXIT_FAILURE);
+        }
         handle_events(epollfd,events,ret,listenfd,buf);
     }
     close(epollfd);
@@ -128,7 +145,7 @@ static void handle_accpet(int epollfd,int listenfd)
     {
         printf("accept a new client: %s:%d\n",inet_ntoa(cliaddr.sin_addr),cliaddr.sin_port);
         //添加一个客户描述符和事件
-        add_event(epollfd,clifd,EPOLLIN);
+        add_event(epollfd,clifd,EPOLLIN | EPOLLET);
     }
 }
 
@@ -176,7 +193,10 @@ static void add_event(int epollfd,int fd,int state)
     struct epoll_event ev;
     ev.events = state;
     ev.data.fd = fd;
-    epoll_ctl(epollfd,EPOLL_CTL_ADD,fd,&ev);
+    if(epoll_ctl(epollfd,EPOLL_CTL_ADD,fd,&ev) == -1) {
+        perror("epoll_ctl: epoll_ctl_add failed");
+        exit(EXIT_FAILURE);
+    }
 }
 
 static void delete_event(int epollfd,int fd,int state)
