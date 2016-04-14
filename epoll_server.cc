@@ -145,7 +145,7 @@ static void handle_accpet(int epollfd,int listenfd)
     {
         printf("accept a new client: %s:%d\n",inet_ntoa(cliaddr.sin_addr),cliaddr.sin_port);
         //添加一个客户描述符和事件
-        add_event(epollfd,clifd,EPOLLIN | EPOLLET);
+        add_event(epollfd,clifd,EPOLLIN | EPOLLET | EPOLLONESHOT);
     }
 }
 
@@ -157,19 +157,19 @@ static void do_read(int epollfd,int fd,char *buf)
     {
         perror("read error:");
         close(fd);
-        delete_event(epollfd,fd,EPOLLIN);
+        //delete_event(epollfd,fd,EPOLLIN);
     }
     else if (nread == 0)
     {
         fprintf(stderr,"client close.\n");
         close(fd);
-        delete_event(epollfd,fd,EPOLLIN);
+        //delete_event(epollfd,fd,EPOLLIN);
     }
     else
     {
         printf("read message is : %s",buf);
         //修改描述符对应的事件，由读改为写
-        modify_event(epollfd,fd,EPOLLOUT);
+        modify_event(epollfd,fd,EPOLLOUT | EPOLLONESHOT);
     }
 }
 
@@ -181,10 +181,10 @@ static void do_write(int epollfd,int fd,char *buf)
     {
         perror("write error:");
         close(fd);
-        delete_event(epollfd,fd,EPOLLOUT);
+        //delete_event(epollfd,fd,EPOLLOUT);
     }
     else
-        modify_event(epollfd,fd,EPOLLIN);
+        modify_event(epollfd,fd,EPOLLIN | EPOLLONESHOT);
     memset(buf,0,MAXSIZE);
 }
 
@@ -204,7 +204,10 @@ static void delete_event(int epollfd,int fd,int state)
     struct epoll_event ev;
     ev.events = state;
     ev.data.fd = fd;
-    epoll_ctl(epollfd,EPOLL_CTL_DEL,fd,&ev);
+    if(epoll_ctl(epollfd,EPOLL_CTL_DEL,fd,&ev) == -1) {
+        perror("epoll_ctl: epoll_ctl_del failed");
+        exit(EXIT_FAILURE);
+    }
 }
 
 static void modify_event(int epollfd,int fd,int state)
@@ -212,5 +215,8 @@ static void modify_event(int epollfd,int fd,int state)
     struct epoll_event ev;
     ev.events = state;
     ev.data.fd = fd;
-    epoll_ctl(epollfd,EPOLL_CTL_MOD,fd,&ev);
+    if(epoll_ctl(epollfd,EPOLL_CTL_MOD,fd,&ev) == -1) {
+        perror("epoll_ctl: epoll_ctl_mod failed");
+        exit(EXIT_FAILURE);
+    }
 }
