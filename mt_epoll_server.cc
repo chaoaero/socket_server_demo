@@ -77,6 +77,7 @@ thread_param clifd_queue[FDSIZE];
 void*  consume(void *arg) {
     thread_param param;
     char buf[MAXSIZE];
+    memset(buf, 0, sizeof(buf));
     int epoll_fd, fd, is_read;
     int thread_id = *((int *)arg);
     for(;;) {
@@ -88,12 +89,15 @@ void*  consume(void *arg) {
         if(iget == FDSIZE)
             iget = 0;
         pthread_mutex_unlock(&clifd_mutex);
+        
         epoll_fd = param.epoll_fd;
         fd = param.fd;
         is_read = param.is_read;
         if(is_read) {
             do_read(epoll_fd, fd, buf);
-            do_write(epoll_fd, fd, buf);
+            char resp[MAXSIZE] = {0};
+            sprintf(resp,"HTTP/1.0 200 OK\r\nContent-type: text/plain\r\n\r\n%s\n", buf);
+            do_write(epoll_fd, fd, resp);
         }
     }
 }
@@ -116,6 +120,10 @@ int main(int argc,char *argv[])
     iget = iput = 0;
 
     do_epoll(listenfd);
+
+    for(int i = 0; i< nthreads; i++) {
+        pthread_join(tid[i], NULL);
+    }
     return 0;
 }
 
@@ -180,7 +188,7 @@ void do_enqueue(int fd, int epoll_fd, int is_read) {
         iput = 0;
     if(iput == iget)
         err_quit("iput = iget = %d\n", iput);
-    pthread_cond_signal(&clifd_cond);
+    pthread_cond_broadcast(&clifd_cond);
     pthread_mutex_unlock(&clifd_mutex);
 }
 
@@ -200,7 +208,7 @@ handle_events(int epollfd,struct epoll_event *events,int num,int listenfd,char *
         else if(events[i].events & EPOLLIN){
             do_enqueue(fd, epollfd,  1);
         } else if(events[i].events & EPOLLOUT) {
-            do_enqueue(fd, epollfd, 0);
+            //do_enqueue(fd, epollfd, 0);
         }
         /*
         else if (events[i].events & EPOLLIN)
@@ -223,6 +231,8 @@ static void handle_accpet(int epollfd,int listenfd)
         printf("accept a new client: %s:%d\n",inet_ntoa(cliaddr.sin_addr),cliaddr.sin_port);
         //添加一个客户描述符和事件
         setnonblocking(clifd);
+        char *str = inet_ntoa(cliaddr.sin_addr);
+        printf("receive messge from : %s\n", str);
         add_event(epollfd,clifd,EPOLLIN | EPOLLET | EPOLLONESHOT);
     }
 }
@@ -261,8 +271,9 @@ static void do_write(int epollfd,int fd,char *buf)
         close(fd);
         //delete_event(epollfd,fd,EPOLLOUT);
     }
-    else
+    else {
         modify_event(epollfd,fd,EPOLLIN | EPOLLONESHOT);
+    }
     memset(buf,0,MAXSIZE);
 }
 
