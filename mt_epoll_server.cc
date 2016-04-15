@@ -12,6 +12,7 @@
 #include <string.h>
 #include <errno.h>
 
+#include "err_msg.h"
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
@@ -57,13 +58,63 @@ int setnonblocking(int sockfd)
     return 0;
 }
 
+static int nthreads = 3;
+pthread_mutex_t clifd_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t clifd_cond = PTHREAD_COND_INITIALIZER;
+
+int iget, iput;
+
+struct thread_param {
+    int epoll_fd;
+    int is_read;
+    int fd;
+};
+
+typedef struct thread_param thread_param;
+
+thread_param clifd_queue[FDSIZE];
+
+void*  consume(void *arg) {
+    thread_param param;
+    char buf[MAXSIZE];
+    int epoll_fd, fd, is_read;
+    int thread_id = *((int *)arg);
+    for(;;) {
+        pthread_mutex_lock(&clifd_mutex);
+        while(iput == iget) {
+            pthread_cond_wait(&clifd_cond, &clifd_mutex);
+        }
+        param = clifd_queue[iget++];
+        if(iget == FDSIZE)
+            iget = 0;
+        pthread_mutex_unlock(&clifd_mutex);
+        epoll_fd = param.epoll_fd;
+        fd = param.fd;
+        is_read = param.is_read;
+        if(is_read) {
+            do_read(epoll_fd, fd, buf);
+            do_write(epoll_fd, fd, buf);
+        }
+    }
+}
 
 
 int main(int argc,char *argv[])
 {
+
+    pthread_t tid[nthreads];
+    int *cc = (int *)malloc(sizeof(int));;
+
+    for(int i = 0; i < nthreads; i++) {
+        cc[i] = i;
+        pthread_create(&tid[i], NULL, consume, &cc[i] );
+    }
     int  listenfd;
     listenfd = socket_bind(IPADDRESS,PORT);
     listen(listenfd,LISTENQ);
+
+    iget = iput = 0;
+
     do_epoll(listenfd);
     return 0;
 }
@@ -118,6 +169,22 @@ static void do_epoll(int listenfd)
     close(epollfd);
 }
 
+void do_enqueue(int fd, int epoll_fd, int is_read) {
+    pthread_mutex_lock(&clifd_mutex);
+    thread_param calei;
+    calei.epoll_fd = epoll_fd;
+    calei.fd = fd;
+    calei.is_read = is_read;
+    clifd_queue[iput++] = calei;
+    if(iput == FDSIZE)
+        iput = 0;
+    if(iput == iget)
+        err_quit("iput = iget = %d\n", iput);
+    pthread_cond_signal(&clifd_cond);
+    pthread_mutex_unlock(&clifd_mutex);
+}
+
+
 static void
 handle_events(int epollfd,struct epoll_event *events,int num,int listenfd,char *buf)
 {
@@ -130,10 +197,17 @@ handle_events(int epollfd,struct epoll_event *events,int num,int listenfd,char *
         //根据描述符的类型和事件类型进行处理
         if ((fd == listenfd) &&(events[i].events & EPOLLIN))
             handle_accpet(epollfd,listenfd);
+        else if(events[i].events & EPOLLIN){
+            do_enqueue(fd, epollfd,  1);
+        } else if(events[i].events & EPOLLOUT) {
+            do_enqueue(fd, epollfd, 0);
+        }
+        /*
         else if (events[i].events & EPOLLIN)
             do_read(epollfd,fd,buf);
         else if (events[i].events & EPOLLOUT)
             do_write(epollfd,fd,buf);
+            */
     }
 }
 static void handle_accpet(int epollfd,int listenfd)
@@ -148,6 +222,7 @@ static void handle_accpet(int epollfd,int listenfd)
     {
         printf("accept a new client: %s:%d\n",inet_ntoa(cliaddr.sin_addr),cliaddr.sin_port);
         //添加一个客户描述符和事件
+        setnonblocking(clifd);
         add_event(epollfd,clifd,EPOLLIN | EPOLLET | EPOLLONESHOT);
     }
 }
